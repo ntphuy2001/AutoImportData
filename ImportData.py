@@ -1,3 +1,4 @@
+import numpy as np
 import xlwings as xw
 import pandas as pd
 import os
@@ -7,6 +8,7 @@ import shutil
 from typing import Dict, List, Any
 from datetime import datetime, date
 import calendar
+import logging
 
 
 # Get ticket id from an issue
@@ -16,12 +18,12 @@ def get_ticket_id(issue: str) -> str:
     return match.group(0) if match else None
 
 
-def init_members_data_in_month(members: Dict[str, str], month: int, year: int) -> Dict[str, List[List[Any]]]:
+def init_members_data_in_month(members: List, month: int, year: int) -> Dict[str, List[List[Any]]]:
     """
     Initialize data structure for each member for a given month.
 
     Args:
-    members (Dict[str, str]): A dictionary of member full names to nicknames.
+    members (List): A List of member nicknames.
     month (int): The month (1-12).
     year (int): The year.
 
@@ -42,37 +44,45 @@ def init_members_data_in_month(members: Dict[str, str], month: int, year: int) -
                 None,  # Code
                 None,  # Start time
                 None,  # End time
-                []     # Tasks
+                []  # Tasks
             ]
             for day in range(1, days_in_month + 1)
         ]
-        for nickname in members.values()
+        for nickname in members
     }
 
 
-def generateDataToEachMember(csv_file, members_data_in_month):
-    # Read the CSV file
-    df = pd.read_csv(csv_file).iloc[::-1]
+def generate_data_to_each_member(logtimeData, members_data_in_month):
+    try:
+        # Expected order of a row of data
+        # templateData[0]: Date
+        # templateData[1]: Code
+        # templateData[2]: starttime
+        # templateData[3]: endtime
+        # templateData[4]: task
 
-    # Expected order of a row of data
-    # templateData[0]: Date
-    # templateData[1]: Code
-    # templateData[2]: starttime
-    # templateData[3]: endtime
-    # templateData[4]: task
+        for index, row in logtimeData.iterrows():
+            if row['User'] not in members_data_in_month.keys():
+                continue
+            # Check if it is a tak of new day
+            taskDate = datetime.strptime(row['Date'], '%m/%d/%Y')
+            start_date = datetime.strptime('9:00', '%H:%M').time(),
+            end_date = datetime.strptime('18:00', '%H:%M').time(),
+            index_of_day_work_task = taskDate.day - 1
+            members_data_in_month[row['User']][index_of_day_work_task][1] = 1
+            members_data_in_month[row['User']][index_of_day_work_task][2] = start_date[0].strftime('%H:%M')
+            members_data_in_month[row['User']][index_of_day_work_task][3] = end_date[0].strftime('%H:%M')
+            members_data_in_month[row['User']][index_of_day_work_task][4].append(get_ticket_id(row['Issue']))
 
-    for index, row in df.iterrows():
-        if row['User'] not in members_data_in_month.keys():
-            continue
-        # Check if it is a tak of new day
-        taskDate = datetime.strptime(row['Date'], '%m/%d/%Y')
-        startDate = datetime.strptime('9:00', '%H:%M').time(),
-        endDate = datetime.strptime('18:00', '%H:%M').time(),
-        indexOfDayWorkTask = taskDate.day - 1
-        members_data_in_month[row['User']][indexOfDayWorkTask][1] = 1
-        members_data_in_month[row['User']][indexOfDayWorkTask][2] = startDate[0].strftime('%H:%M')
-        members_data_in_month[row['User']][indexOfDayWorkTask][3] = endDate[0].strftime('%H:%M')
-        members_data_in_month[row['User']][indexOfDayWorkTask][4].append(get_ticket_id(row['Issue']))
+    except xw.XlwingsError as e:
+        logging.error(f"An error occurred while interacting with Excel: {str(e)}")
+        raise
+    except KeyError as e:
+        logging.error(f"Invalid member key: {str(e)}")
+    except ValueError as e:
+        logging.error(f"Invalid data format: {str(e)}")
+    except Exception as e:
+        logging.error(f"An error occurred during data generation: {str(e)}")
 
     return members_data_in_month
 
@@ -93,54 +103,99 @@ def copy_xlsm_file(app, source_path, destination_path):
     print(f"Copied {source_path} to {destination_path}")
 
 
+def logtime_data(csv_file_path):
+    return pd.read_csv(csv_file_path).iloc[::-1]
+
+
 def import_data(xlsm_file_path, csv_file_path):
     app = xw.App(visible=False)
-    # List member
+    try:
+        # List member
 
-    config = open('config.json')
-    data = json.load(config)
-    members = data['members']
+        config = open('config.json')
+        try:
+            data = json.load(config)
+            members = data['members']
+        except json.decoder.JSONDecodeError as e:
+            logging.error(
+                f"Invalid JSON format in config file: {str(e)}. "
+                f"Please visit https://jsonformatter.org/ to reformat the JSON file to the correct format. ")
+            raise
+        except KeyError as e:
+            logging.error(f"Missing required key in config file: {str(e)}")
+            raise
+        finally:
+            config.close()
 
-    xlsmFileName = os.path.splitext(xlsm_file_path)
-    updated_xlsm_file_path = f"{xlsmFileName[0]}_update{xlsmFileName[1]}"
+        logtimeData = logtime_data(csv_file_path)
+        members_in_logtime = list(logtimeData['User'].unique())
 
-    copy_xlsm_file(app, xlsm_file_path, updated_xlsm_file_path)
-    wb = app.books.open(updated_xlsm_file_path)
+        contained_member = [member for member in members.values() if member in members_in_logtime]
+        if not contained_member:
+            raise ValueError('Can not found any member in config.json file exists in timelog file')
 
-    sheet = wb.sheets['設定']
-    year = int(sheet.range('C5').value)
-    month = int(sheet.range('C7').value)
+        xlsm_file_name = os.path.splitext(xlsm_file_path)
+        updated_xlsm_file_path = f"{xlsm_file_name[0]}_update{xlsm_file_name[1]}"
 
-    membersDataInMonth = init_members_data_in_month(members, month, year)
-    membersDataInMonth = generateDataToEachMember(csv_file_path, membersDataInMonth)
+        copy_xlsm_file(app, xlsm_file_path, updated_xlsm_file_path)
+        wb = app.books.open(updated_xlsm_file_path)
 
-    # Access the sheet where you want to import data
-    for fullname, nickname in members.items():
-        sheet = wb.sheets[fullname]
+        sheet = wb.sheets['設定']
+        year = int(sheet.range('C5').value)
+        month = int(sheet.range('C7').value)
 
-        # Prepare data for writing in batches
-        code = []
-        starttime = []
-        endtime = []
-        task = []
+        members_data_in_month = init_members_data_in_month(members_in_logtime, month, year)
+        members_data_in_month = generate_data_to_each_member(logtimeData, members_data_in_month)
 
-        for day in membersDataInMonth[nickname]:
-            code.append([day[1]])
-            starttime.append([day[2]])
-            endtime.append([day[3]])
-            task.append([", ".join(day[4])] if day[4] != [] else [None])
+        # Access the sheet where you want to import data
+        for fullname, nickname in members.items():
+            if nickname not in contained_member:
+                continue
+            if fullname not in [sheet.name for sheet in wb.sheets]:
+                raise KeyError(f"Sheet '{fullname}' does not exist in the workbook. Skipping.")
 
-        # Write data in batches
-        sheet.range('D10').options(index=False).value = code
-        sheet.range('F10').options(index=False).value = starttime
-        sheet.range('G10').options(index=False).value = endtime
-        sheet.range('K10').options(index=False).value = task
+            sheet = wb.sheets[fullname]
 
-    # Save the Excel file
-    wb.save()
+            # Prepare data for writing in batches
+            code = []
+            starttime = []
+            endtime = []
+            task = []
 
-    # Close the workbook without saving changes
-    wb.close()
+            for day in members_data_in_month[nickname]:
+                code.append([day[1]])
+                starttime.append([day[2]])
+                endtime.append([day[3]])
+                task.append([", ".join(day[4])] if day[4] != [] else [None])
 
-    # Quit the Excel application
-    app.quit()
+            task = [list(np.unique(np.array(value))) for value in task]
+
+            # Write data in batches
+            sheet.range('D10').options(index=False).value = code
+            sheet.range('F10').options(index=False).value = starttime
+            sheet.range('G10').options(index=False).value = endtime
+            sheet.range('K10').options(index=False).value = task
+
+        # Save the Excel file
+        wb.save()
+
+        # Close the workbook without saving changes
+        wb.close()
+
+    except KeyError as e:
+        logging.error(str(e))
+        raise
+    except FileNotFoundError as e:
+        logging.error(f"File not found: {str(e)}")
+        raise
+    except PermissionError as e:
+        logging.error(f"Permission denied: {str(e)}")
+        raise
+    except Exception as e:
+        logging.error(f"An error occurred during import: {str(e)}")
+        raise
+    finally:
+        app.quit()
+
+# Configure logging
+logging.basicConfig(filename='app.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')

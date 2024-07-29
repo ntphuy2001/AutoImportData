@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+import logging
 import tkinter as tk
 from tkinter import ttk, filedialog
 import threading
@@ -67,11 +67,14 @@ class ModernAutoImportApp(tk.Tk):
         self.browse_file(self.timelog_entry)
 
     def browse_file(self, entry: ttk.Entry):
-        file_path = filedialog.askopenfilename(
-            filetypes=[("All Files", "*.*"), ("Excel Files", "*.xlsx;*.xls"), ("Text Files", "*.txt")])
-        if file_path:
-            entry.delete(0, tk.END)
-            entry.insert(0, file_path)
+        try:
+            file_path = filedialog.askopenfilename(
+                filetypes=[("All Files", "*.*"), ("Excel Files", "*.xlsx;*.xls"), ("Text Files", "*.txt")])
+            if file_path:
+                entry.delete(0, tk.END)
+                entry.insert(0, file_path)
+        except Exception as e:
+            logging.error(f"An error occurred while selecting a file: {str(e)}")
 
     def handle_start_click(self):
         self.toggle_ui_state(False)
