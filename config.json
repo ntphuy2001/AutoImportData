@@ -1,0 +1,12 @@
+{
+  "members": {
+    "Nguyen Trieu Duong": "DuongNT",
+    "Bui Hoang Anh Tuan": "TuanBHA",
+    "Truong Nguyen Minh An":  "AnTNM"
+  },
+
+  "vacations": [{
+    "date": "2024/06/19",
+    "type": 6
+  }]
+}
