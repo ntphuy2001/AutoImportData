@@ -6,7 +6,7 @@ import re
 import json
 import shutil
 from typing import Dict, List, Any
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import calendar
 import logging
 
@@ -18,12 +18,13 @@ def get_ticket_id(issue: str) -> str:
     return match.group(0) if match else None
 
 
-def init_members_data_in_month(members: List, month: int, year: int) -> Dict[str, List[List[Any]]]:
+def init_members_data_in_month(members: Dict[str, str], month: int, year: int, wb: xw.main.Books) \
+        -> Dict[str, List[List[Any]]]:
     """
     Initialize data structure for each member for a given month.
 
     Args:
-    members (List): A List of member nicknames.
+    members (Dict[str, str]): A List of member nicknames.
     month (int): The month (1-12).
     year (int): The year.
 
@@ -48,7 +49,7 @@ def init_members_data_in_month(members: List, month: int, year: int) -> Dict[str
             ]
             for day in range(1, days_in_month + 1)
         ]
-        for nickname in members
+        for nickname in members.values()
     }
 
 
@@ -70,13 +71,24 @@ def generate_data_to_each_member(logtimeData, members_data_in_month):
             end_date = datetime.strptime('18:00', '%H:%M').time(),
             index_of_day_work_task = taskDate.day - 1
             members_data_in_month[row['User']][index_of_day_work_task][1] = 1
-            members_data_in_month[row['User']][index_of_day_work_task][2] = start_date[0].strftime('%H:%M')
-            members_data_in_month[row['User']][index_of_day_work_task][3] = end_date[0].strftime('%H:%M')
+            if members_data_in_month[row['User']][index_of_day_work_task][2] is None:
+                members_data_in_month[row['User']][index_of_day_work_task][2] = start_date[0].strftime('%H:%M')
+
+            if members_data_in_month[row['User']][index_of_day_work_task][3] is None:
+                start_datetime = datetime.combine(datetime.today(), start_date[0])
+                task_duration = timedelta(hours=row['Hours'] + 1)
+                end_datetime = start_datetime + task_duration
+                members_data_in_month[row['User']][index_of_day_work_task][3] = end_datetime.strftime('%H:%M')
+            else:
+                start_datetime = datetime.combine(
+                    datetime.today(),
+                    datetime.strptime(members_data_in_month[row['User']][index_of_day_work_task][3], '%H:%M').time(),
+                )
+                task_duration = timedelta(hours=row['Hours'])
+                end_datetime = start_datetime + task_duration
+                members_data_in_month[row['User']][index_of_day_work_task][3] = end_datetime.strftime('%H:%M')
             members_data_in_month[row['User']][index_of_day_work_task][4].append(get_ticket_id(row['Issue']))
 
-    except xw.XlwingsError as e:
-        logging.error(f"An error occurred while interacting with Excel: {str(e)}")
-        raise
     except KeyError as e:
         logging.error(f"Invalid member key: {str(e)}")
     except ValueError as e:
@@ -107,15 +119,39 @@ def logtime_data(csv_file_path):
     return pd.read_csv(csv_file_path).iloc[::-1]
 
 
+def write_data(sheet, code, starttime, endtime, tasks, start_row):
+    for day in range(1, len(tasks) + 1):
+        if not tasks[day - 1]:
+            continue
+        sheet.range(f'D{start_row + day}').value = code[day - 1]
+        sheet.range(f'F{start_row + day}').value = starttime[day - 1]
+        sheet.range(f'G{start_row + day}').value = endtime[day - 1]
+        sheet.range(f'K{start_row + day}').value = tasks[day - 1]
+
+
+def get_vacation_in_month(vacations, month, year):
+    vacations_in_month = []
+    for vacation in vacations:
+        vacation_date = datetime.strptime(vacation['date'], '%Y/%m/%d')
+        if vacation_date.month == month and vacation_date.year == year:
+            vacations_in_month.append({'date': vacation_date, 'type': vacation['type']})
+    return vacations_in_month
+
+
+def write_vacations_day(sheet, vacations_in_month, start_row):
+    for vacation in vacations_in_month:
+        sheet.range(f'D{start_row + vacation['date'].day}').value = vacation['type']
+
+
 def import_data(xlsm_file_path, csv_file_path):
     app = xw.App(visible=False)
     try:
         # List member
-
         config = open('config.json')
         try:
             data = json.load(config)
             members = data['members']
+            vacations = data['vacations']
         except json.decoder.JSONDecodeError as e:
             logging.error(
                 f"Invalid JSON format in config file: {str(e)}. "
@@ -130,7 +166,12 @@ def import_data(xlsm_file_path, csv_file_path):
         logtimeData = logtime_data(csv_file_path)
         members_in_logtime = list(logtimeData['User'].unique())
 
+        # Get list member exists in file config and logtime
         contained_member = [member for member in members.values() if member in members_in_logtime]
+        dir_contained_member = {
+            fullname: nickname for fullname, nickname in members.items() if nickname in contained_member
+        }
+
         if not contained_member:
             raise ValueError('Can not found any member in config.json file exists in timelog file')
 
@@ -144,7 +185,7 @@ def import_data(xlsm_file_path, csv_file_path):
         year = int(sheet.range('C5').value)
         month = int(sheet.range('C7').value)
 
-        members_data_in_month = init_members_data_in_month(members_in_logtime, month, year)
+        members_data_in_month = init_members_data_in_month(dir_contained_member, month, year, wb)
         members_data_in_month = generate_data_to_each_member(logtimeData, members_data_in_month)
 
         # Access the sheet where you want to import data
@@ -166,20 +207,19 @@ def import_data(xlsm_file_path, csv_file_path):
                 code.append([day[1]])
                 starttime.append([day[2]])
                 endtime.append([day[3]])
-                task.append([", ".join(day[4])] if day[4] != [] else [None])
+                task.append([", ".join(day[4])] if day[4] != [] else [])
 
             task = [list(np.unique(np.array(value))) for value in task]
 
             # Write data in batches
-            sheet.range('D10').options(index=False).value = code
-            sheet.range('F10').options(index=False).value = starttime
-            sheet.range('G10').options(index=False).value = endtime
-            sheet.range('K10').options(index=False).value = task
+            write_data(sheet, code, starttime, endtime, task, start_row=9)
 
-        # Save the Excel file
+            # Edit vacation day
+            vacations_in_month = get_vacation_in_month(vacations, month, year)
+            write_vacations_day(sheet, vacations_in_month, start_row=9)
+
+        # Save and close the Excel file
         wb.save()
-
-        # Close the workbook without saving changes
         wb.close()
 
     except KeyError as e:
@@ -187,6 +227,9 @@ def import_data(xlsm_file_path, csv_file_path):
         raise
     except FileNotFoundError as e:
         logging.error(f"File not found: {str(e)}")
+        raise
+    except xw.XlwingsError as e:
+        logging.error(f"An error occurred while interacting with Excel: {str(e)}")
         raise
     except PermissionError as e:
         logging.error(f"Permission denied: {str(e)}")
@@ -196,6 +239,7 @@ def import_data(xlsm_file_path, csv_file_path):
         raise
     finally:
         app.quit()
+
 
 # Configure logging
 logging.basicConfig(filename='app.log', level=logging.ERROR, format='%(asctime)s - %(levelname)s - %(message)s')
