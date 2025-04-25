@@ -53,7 +53,7 @@ def init_members_data_in_month(members: Dict[str, str], month: int, year: int, w
     }
 
 
-def generate_data_to_each_member(logtimeData, members_data_in_month):
+def generate_data_to_each_member(logtimeData, members_data_in_month, date_format):
     try:
         # Expected order of a row of data
         # templateData[0]: Date
@@ -66,7 +66,7 @@ def generate_data_to_each_member(logtimeData, members_data_in_month):
             if row['User'] not in members_data_in_month.keys():
                 continue
             # Check if it is a tak of new day
-            taskDate = datetime.strptime(row['Date'], '%m/%d/%Y')
+            taskDate = datetime.strptime(row['Date'], date_format)
             start_date = datetime.strptime('9:00', '%H:%M').time(),
             end_date = datetime.strptime('18:00', '%H:%M').time(),
             index_of_day_work_task = taskDate.day - 1
@@ -152,6 +152,21 @@ def import_data(xlsm_file_path, csv_file_path):
             data = json.load(config)
             members = data['members']
             vacations = data['vacations']
+            # Parse the date format from config
+            date_format_str = data['date_format']
+            # Map the date components to their corresponding format codes
+            format_map = {'Y': '%Y', 'YYYY': '%Y', 'm': '%m', 'mm': '%m', 'd': '%d', 'dd': '%d'}
+            
+            # Handle different separators (- or /)
+            if '-' in date_format_str:
+                components = date_format_str.split('-')
+                date_format = '-'.join(format_map[component] for component in components)
+            elif '/' in date_format_str:
+                components = date_format_str.split('/')
+                date_format = '-'.join(format_map[component] for component in components)
+            else:
+                # Default format if no separator found
+                date_format = '%Y-%m-%d'
         except json.decoder.JSONDecodeError as e:
             logging.error(
                 f"Invalid JSON format in config file: {str(e)}. "
@@ -186,7 +201,7 @@ def import_data(xlsm_file_path, csv_file_path):
         month = int(sheet.range('C7').value)
 
         members_data_in_month = init_members_data_in_month(dir_contained_member, month, year, wb)
-        members_data_in_month = generate_data_to_each_member(logtimeData, members_data_in_month)
+        members_data_in_month = generate_data_to_each_member(logtimeData, members_data_in_month, date_format)
 
         # Access the sheet where you want to import data
         for fullname, nickname in members.items():
