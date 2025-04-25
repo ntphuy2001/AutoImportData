@@ -5,6 +5,8 @@
     "Truong Nguyen Minh An":  "AnTNM"
   },
 
+  "date_format": "Y/m/d",
+
   "vacations": [{
     "date": "2024/06/19",
     "type": 6
